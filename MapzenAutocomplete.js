@@ -1,6 +1,25 @@
-import React, { PropTypes } from 'react';
-import { TextInput, View, ListView, Image, Text, Dimensions, TouchableHighlight, TouchableWithoutFeedback, Platform, ActivityIndicator, PixelRatio } from 'react-native';
+import React, {
+  PropTypes
+} from 'react';
+import {
+  TextInput,
+  View,
+  ListView,
+  ScrollView,
+  Image,
+  Text,
+  StyleSheet,
+  Dimensions,
+  TouchableHighlight,
+  TouchableWithoutFeedback,
+  Platform,
+  ActivityIndicator,
+  PixelRatio
+} from 'react-native';
 import Qs from 'qs';
+import debounce from 'lodash.debounce';
+
+const WINDOW = Dimensions.get('window');
 
 const defaultStyles = {
   container: {
@@ -13,6 +32,7 @@ const defaultStyles = {
     borderBottomColor: '#b5b5b5',
     borderTopWidth: 1 / PixelRatio.get(),
     borderBottomWidth: 1 / PixelRatio.get(),
+    flexDirection: 'row',
   },
   textInput: {
     backgroundColor: '#FFFFFF',
@@ -26,14 +46,14 @@ const defaultStyles = {
     marginLeft: 8,
     marginRight: 8,
     fontSize: 15,
+    flex: 1
   },
   poweredContainer: {
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
     alignItems: 'center',
+    backgroundColor: '#FFFFFF',
   },
-  powered: {
-    marginTop: 15,
-  },
+  powered: {},
   listView: {
     // flex: 1,
   },
@@ -43,11 +63,10 @@ const defaultStyles = {
     flexDirection: 'row',
   },
   separator: {
-    height: 1,
+    height: StyleSheet.hairlineWidth,
     backgroundColor: '#c8c7cc',
   },
-  description: {
-  },
+  description: {},
   loader: {
     // flex: 1,
     flexDirection: 'row',
@@ -63,11 +82,18 @@ const MapzenPlacesAutocomplete = React.createClass({
 
   propTypes: {
     placeholder: React.PropTypes.string,
+    keyboardType: React.PropTypes.string,
+    returnKeyType: React.PropTypes.string,
     placeholderTextColor: React.PropTypes.string,
+    underlineColorAndroid: React.PropTypes.string,
+    onSubmitEditing: React.PropTypes.func,
     onPress: React.PropTypes.func,
+    onNotFound: React.PropTypes.func,
+    onFail: React.PropTypes.func,
     minLength: React.PropTypes.number,
     fetchDetails: React.PropTypes.bool,
     autoFocus: React.PropTypes.bool,
+    autoFillOnNotFound: React.PropTypes.bool,
     getDefaultValue: React.PropTypes.func,
     timeout: React.PropTypes.number,
     onTimeout: React.PropTypes.func,
@@ -81,64 +107,90 @@ const MapzenPlacesAutocomplete = React.createClass({
     currentLocation: React.PropTypes.bool,
     currentLocationLabel: React.PropTypes.string,
     nearbyPlacesAPI: React.PropTypes.string,
+    layers: React.PropTypes.string,
+    enableHighAccuracyLocation: React.PropTypes.bool,
     filterReverseGeocodingByTypes: React.PropTypes.array,
     predefinedPlacesAlwaysVisible: React.PropTypes.bool,
     enableEmptySections: React.PropTypes.bool,
-    apiKey: React.PropTypes.string
+    renderDescription: React.PropTypes.func,
+    renderRow: React.PropTypes.func,
+    renderLeftButton: React.PropTypes.func,
+    renderRightButton: React.PropTypes.func,
+    listUnderlayColor: React.PropTypes.string,
+    debounce: React.PropTypes.number,
+    isRowScrollable: React.PropTypes.bool
   },
 
   getDefaultProps() {
     return {
-      placeholder: 'Search',
+      placeholder: 'Where do you want to dock?',
       placeholderTextColor: '#A8A8A8',
+      isRowScrollable: true,
+      underlineColorAndroid: 'transparent',
+      keyboardType: 'default',
+      returnKeyType: 'default',
       onPress: () => {},
+      onNotFound: () => {},
+      onFail: () => {},
+      onSubmitEditing: () => {},
       minLength: 0,
       fetchDetails: false,
       autoFocus: false,
+      autoFillOnNotFound: false,
+      keyboardShouldPersistTaps: 'always',
       getDefaultValue: () => '',
       timeout: 20000,
-      onTimeout: () => console.warn('mapzen places autocomplete: request timeout'),
+      onTimeout: () => console.warn('Mapzen places autocomplete: request timeout'),
       query: {
         key: 'missing api key',
         language: 'en',
         types: 'geocode',
       },
-      MapzenReverseGeocodingQuery: {
-      },
+      MapzenReverseGeocodingQuery: {},
       MapzenPlacesSearchQuery: {
         rankby: 'distance',
         types: 'food',
       },
-      styles: {
-      },
+      styles: {},
       textInputProps: {},
-      enablePoweredByContainer: true,
+      enablePoweredByContainer: false,
       predefinedPlaces: [],
       currentLocation: false,
       currentLocationLabel: 'Current location',
       nearbyPlacesAPI: 'MapzenPlacesSearch',
+      enableHighAccuracyLocation: true,
       filterReverseGeocodingByTypes: [],
       predefinedPlacesAlwaysVisible: false,
-      enableEmptySections: true
+      enableEmptySections: true,
+      listViewDisplayed: 'auto',
+      debounce: 0
     };
   },
 
   getInitialState() {
-    const ds = new ListView.DataSource({rowHasChanged: function rowHasChanged(r1, r2) {
-      if (typeof r1.isLoading !== 'undefined') {
-        return true;
+    const ds = new ListView.DataSource({
+      rowHasChanged: function rowHasChanged(r1, r2) {
+        if (typeof r1.isLoading !== 'undefined') {
+          return true;
+        }
+        return r1 !== r2;
       }
-      return r1 !== r2;
-    }});
+    });
     return {
       text: this.props.getDefaultValue(),
       dataSource: ds.cloneWithRows(this.buildRowsFromResults([])),
-      listViewDisplayed: false,
+      listViewDisplayed: this.props.listViewDisplayed === 'auto' ? false : this.props.listViewDisplayed,
     };
   },
 
   setAddressText(address) {
-    this.setState({ text: address })
+    this.setState({
+      text: address
+    })
+  },
+
+  getAddressText() {
+    return this.state.text
   },
 
   buildRowsFromResults(results) {
@@ -148,7 +200,6 @@ const MapzenPlacesAutocomplete = React.createClass({
       res = [...this.props.predefinedPlaces];
       if (this.props.currentLocation === true) {
         res.unshift({
-          properties: {label: "Current location"},
           description: this.props.currentLocationLabel,
           isCurrentLocation: true,
         });
@@ -167,8 +218,27 @@ const MapzenPlacesAutocomplete = React.createClass({
     return [...res, ...results];
   },
 
+  componentDidMount() {
+    this.mounted = true;
+ },
+
+  componentWillMount() {
+    this._request = this.props.debounce
+      ? debounce(this._request, this.props.debounce)
+      : this._request;
+  },
+
+  componentWillReceiveProps(nextProps) {
+    if (nextProps.listViewDisplayed !== 'auto') {
+      this.setState({
+        listViewDisplayed: nextProps.listViewDisplayed,
+      });
+    }
+  },
+
   componentWillUnmount() {
     this._abortRequests();
+    this.mounted = false;
   },
 
   _abortRequests() {
@@ -194,60 +264,48 @@ const MapzenPlacesAutocomplete = React.createClass({
     if (this.refs.textInput) this.refs.textInput.blur();
   },
 
-getCurrentLocation() {
-  var self = this;
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-        (position) => {
-          self._requestNearby(position.coords.latitude, position.coords.longitude);
+  getCurrentLocation() {
+    let options = null;
 
-          alert("current position is : LAT : " + position.coords.latitude + " / LNG : " + position.coords.longitude);
-        },
-        (error) => alert(error.message),
-        {enableHighAccuracy: true, timeout: 10000, maximumAge: 1000}
-      );
-  };
-},
+    if (this.props.enableHighAccuracyLocation) {
+      options = (Platform.OS === 'android') ? {
+        enableHighAccuracy: true,
+        timeout: 20000
+      } : {
+        enableHighAccuracy: true,
+        timeout: 20000,
+        maximumAge: 1000
+      };
+    }
 
-  // getCurrentLocation() {
-    // navigator.geolocation.getCurrentPosition(
-    //   (position) => {
-    //     // this._requestNearby(position.coords.latitude, position.coords.longitude);
-    //   },
-    //   (error) => {
-    //     this._disableRowLoaders();
-    //     if (error.code <= 2) { // timeout
-    //       alert("you have no gps or other problem - high accuracy");
-    //     }
-    //     if (error.code == 3) { // timeout
-    //       alert("search timed out");
-    //       this.getLowAccuracyLocation();
-    //     }
-    //   },
-    //   {enableHighAccuracy: true, timeout: 5000, maximumAge: 1000}
-    // );
-  // },
-
-  getLowAccuracyLocation() {
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        if (this.props.nearbyPlacesAPI === 'None') {
+          let currentLocation = {
+            description: this.props.currentLocationLabel,
+            geometry: {
+              location: {
+                lat: position.coords.latitude,
+                lng: position.coords.longitude
+              }
+            }
+          };
+          this._disableRowLoaders();
+          this.props.onPress(currentLocation, currentLocation);
+        } else {
+          this._requestNearby(position.coords.latitude, position.coords.longitude);
+        }
       },
       (error) => {
         this._disableRowLoaders();
-        if (error.code <= 2) { // timeout
-          alert("you have no gps or other problem - low accuracy");
-        }
-        if (error.code == 3) { // timeout
-          alert("search timed out with low accuracy");
-        }
+        alert(error.message);
       },
-      {enableHighAccuracy: false, timeout: 5000, maximumAge: 1000}
+      options
     );
   },
 
   _enableRowLoader(rowData) {
     let rows = this.buildRowsFromResults(this._results);
-    // console.log(rows);
     for (let i = 0; i < rows.length; i++) {
       if ((rows[i].place_id === rowData.place_id) || (rows[i].isCurrentLocation === true && rowData.isCurrentLocation === true)) {
         rows[i].isLoading = true;
@@ -259,7 +317,7 @@ getCurrentLocation() {
     }
   },
   _disableRowLoaders() {
-    if (this.isMounted()) {
+    if (this.mounted) {
       for (let i = 0; i < this._results.length; i++) {
         if (this._results[i].isLoading === true) {
           this._results[i].isLoading = false;
@@ -271,63 +329,99 @@ getCurrentLocation() {
     }
   },
   _onPress(rowData) {
-    // console.log(rowData.isPredefinedPlace);
-    // if (rowData.isPredefinedPlace !== true && this.props.fetchDetails === true) {
-    this.props.onPress(rowData, "MYTEST");
-    if (false) {
-      // if (rowData.isLoading === true) {
-      //   // already requesting
-      //   return;
-      // }
-      //
-      // this._abortRequests();
-      //
-      // // display loader
-      // this._enableRowLoader(rowData);
-      //
-      // // fetch details
-      // const request = new XMLHttpRequest();
-      // this._requests.push(request);
-      // request.timeout = this.props.timeout;
-      // request.ontimeout = this.props.onTimeout;
-      // request.onreadystatechange = () => {
-      //   if (request.readyState !== 4) {
-      //     return;
-      //   }
-      //   if (request.status === 200) {
-      //     const responseJSON = JSON.parse(request.responseText);
-      //     if (responseJSON.status === 'OK') {
-      //       if (this.isMounted()) {
-      //         const details = responseJSON.result;
-      //         this._disableRowLoaders();
-      //         this._onBlur();
-      //
-      //         this.setState({
-      //           text: rowData.properties.label,
-      //         });
-      //
-      //         delete rowData.isLoading;
-      //         this.props.onPress(rowData, details);
-      //       }
-      //     } else {
-      //       this._disableRowLoaders();
-      //       console.warn('mapzen places autocomplete: ' + responseJSON.status);
-      //     }
-      //   } else {
-      //     this._disableRowLoaders();
-      //     console.warn('mapzen places autocomplete: request could not be completed or has been aborted');
-      //   }
-      // };
-      // request.open('GET', 'https://search.mapzen.com/v1/autocomplete?api_key=search-XXXXXX&focus.point.lat=48.1&focus.point.lon=11.4&text=Am%20Sulzbogen%2020');
-      // request.send();
+    if(rowData) {
+      this.setState({
+        text: rowData.properties.label,
+      });
+
+      this._onBlur();
+
+      delete rowData.isLoading;
+      /*
+      let predefinedPlace = this._getPredefinedPlace(rowData);
+
+      // sending predefinedPlace as details for predefined places
+      this.props.onPress(predefinedPlace, predefinedPlace);
+      */
+
+      this.props.onPress(rowData);
+
+    }
+
+    /*
+    if (rowData.isPredefinedPlace !== true && this.props.fetchDetails === true) {
+      if (rowData.isLoading === true) {
+        // already requesting
+        return;
+      }
+
+      this._abortRequests();
+
+      // display loader
+      this._enableRowLoader(rowData);
+
+      // fetch details
+      const request = new XMLHttpRequest();
+      this._requests.push(request);
+      request.timeout = this.props.timeout;
+      request.ontimeout = this.props.onTimeout;
+      request.onreadystatechange = () => {
+        if (request.readyState !== 4) {
+          return;
+        }
+        if (request.status === 200) {
+          const responseJSON = JSON.parse(request.responseText);
+          if (responseJSON.status === 'OK') {
+            if (this.isMounted()) {
+              const details = responseJSON.result;
+              this._disableRowLoaders();
+              this._onBlur();
+
+              this.setState({
+                text: rowData.description,
+              });
+
+              delete rowData.isLoading;
+              this.props.onPress(rowData, details);
+            }
+          } else {
+            this._disableRowLoaders();
+
+            if (this.props.autoFillOnNotFound) {
+              this.setState({
+                text: rowData.description,
+              });
+              delete rowData.isLoading;
+            }
+
+            if (!this.props.onNotFound)
+              console.warn('Mapzen places autocomplete: ' + responseJSON.status);
+            else
+              this.props.onNotFound(responseJSON);
+
+          }
+        } else {
+          this._disableRowLoaders();
+
+          if (!this.props.onFail)
+            console.warn('Mapzen places autocomplete: request could not be completed or has been aborted');
+          else
+            this.props.onFail();
+        }
+      };
+      request.open('GET', 'https://maps.googleapis.com/maps/api/place/details/json?' + Qs.stringify({
+        key: this.props.query.key,
+        placeid: rowData.place_id,
+        language: this.props.query.language,
+      }));
+      request.send();
     } else if (rowData.isCurrentLocation === true) {
 
       // display loader
       this._enableRowLoader(rowData);
 
-
       this.setState({
-        text: rowData.properties.label,
+        text: rowData.description,
       });
       this.triggerBlur(); // hide keyboard but not the results
 
@@ -337,7 +431,7 @@ getCurrentLocation() {
 
     } else {
       this.setState({
-        text: rowData.properties.label,
+        text: rowData.description || rowData.formatted_address || rowData.vicinity,
       });
 
       this._onBlur();
@@ -349,6 +443,7 @@ getCurrentLocation() {
       // sending predefinedPlace as details for predefined places
       this.props.onPress(predefinedPlace, predefinedPlace);
     }
+    */
   },
   _results: [],
   _requests: [],
@@ -358,9 +453,9 @@ getCurrentLocation() {
       return rowData;
     }
     for (let i = 0; i < this.props.predefinedPlaces.length; i++) {
-      // if (this.props.predefinedPlaces[i].properties.label === rowData.properties.name) {
+      if (this.props.predefinedPlaces[i].description === rowData.description) {
         return this.props.predefinedPlaces[i];
-      // }
+      }
     }
     return rowData;
   },
@@ -384,7 +479,6 @@ getCurrentLocation() {
     return results;
   },
 
-
   _requestNearby(latitude, longitude) {
     this._abortRequests();
     if (latitude !== undefined && longitude !== undefined && latitude !== null && longitude !== null) {
@@ -400,27 +494,49 @@ getCurrentLocation() {
           const responseJSON = JSON.parse(request.responseText);
 
           this._disableRowLoaders();
-          // console.log(responseJSON.features[0].properties);
-          if (typeof responseJSON.features !== 'undefined') {
-            if (this.isMounted()) {
-              this._results = responseJSON.geocoding.features;
+
+          if (typeof responseJSON.results !== 'undefined') {
+            if (this.mounted) {
+              var results = [];
+              if (this.props.nearbyPlacesAPI === 'MapzenReverseGeocoding') {
+                results = this._filterResultsByTypes(responseJSON, this.props.filterReverseGeocodingByTypes);
+              } else {
+                results = responseJSON.results;
+                console.log("results", results);
+                console.log("rows from result", this.buildRowsFromResults(results));
+              }
+
               this.setState({
-                dataSource: this.state.dataSource.cloneWithRows(this.buildRowsFromResults(responseJSON.features)),
+                dataSource: this.state.dataSource.cloneWithRows(this.buildRowsFromResults(results)),
               });
+
             }
           }
           if (typeof responseJSON.error_message !== 'undefined') {
-            console.warn('mapzen places autocomplete: ' + responseJSON.error_message);
+            console.warn('Mapzen places autocomplete: ' + responseJSON.error_message);
           }
         } else {
-          // console.warn("mapzen places autocomplete: request could not be completed or has been aborted");
+          // console.warn("Mapzen places autocomplete: request could not be completed or has been aborted");
         }
       };
 
-      // https://mapzen.com/documentation/search/reverse/#distance-confidence-scores-for-the-results
-      var mapzenSearch = "https://search.mapzen.com/v1/reverse?point.lat="+ latitude + "&point.lon=" + longitude;
-      // console.log(mapzenSearch);
-      request.open('GET', mapzenSearch);
+      let url = '';
+      if (this.props.nearbyPlacesAPI === 'MapzenReverseGeocoding') {
+        // your key must be allowed to use Mapzen Maps Geocoding API
+        url = 'https://maps.googleapis.com/maps/api/geocode/json?' + Qs.stringify({
+          latlng: latitude + ',' + longitude,
+          key: this.props.query.key,
+          ...this.props.MapzenReverseGeocodingQuery,
+        });
+      } else {
+        url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json?' + Qs.stringify({
+          location: latitude + ',' + longitude,
+          key: this.props.query.key,
+          ...this.props.MapzenPlacesSearchQuery,
+        });
+      }
+
+      request.open('GET', url);
       request.send();
     } else {
       this._results = [];
@@ -429,9 +545,6 @@ getCurrentLocation() {
       });
     }
   },
-
-
-
 
   _request(text) {
     this._abortRequests();
@@ -448,8 +561,8 @@ getCurrentLocation() {
           const responseJSON = JSON.parse(request.responseText);
           // console.log(responseJSON.features[0].properties);
           if (typeof responseJSON.features !== 'undefined') {
-            if (this.isMounted()) {
-              this._results = responseJSON.geocoding.features;
+            if (this.mounted) {
+              this._results = responseJSON.features;
               this.setState({
                 dataSource: this.state.dataSource.cloneWithRows(this.buildRowsFromResults(responseJSON.features)),
               });
@@ -459,10 +572,18 @@ getCurrentLocation() {
             console.warn('mapzen places autocomplete: ' + responseJSON.error_message);
           }
         } else {
-          // console.warn("mapzen places autocomplete: request could not be completed or has been aborted");
+          // console.warn("Mapzen places autocomplete: request could not be completed or has been aborted");
         }
       };
-      var mapzenSearch = 'https://search.mapzen.com/v1/autocomplete?api_key=search-' + this.props.query.key + '&text=' +encodeURIComponent(text);
+      //https://search.mapzen.com/v1/autocomplete?text=Sara&boundary.country=usa&layers=locality&api_key=mapzen-QA5vdP9
+
+
+      var mapzenSearch = 'https://search.mapzen.com/v1/search?boundary.country=usa&size=5&api_key=mapzen-QA5vdP9' + '&text='  +encodeURIComponent(text);
+
+      if(this.props.layers) {
+        mapzenSearch = mapzenSearch + '&layers='+ this.props.layers;
+      }
+
       request.open('GET', mapzenSearch);
       request.send();
     } else {
@@ -472,12 +593,23 @@ getCurrentLocation() {
       });
     }
   },
+
   _onChangeText(text) {
     this._request(text);
     this.setState({
       text: text,
       listViewDisplayed: true,
     });
+  },
+
+  _handleChangeText(text) {
+    this._onChangeText(text);
+    const onChangeText = this.props
+      && this.props.textInputProps
+      && this.props.textInputProps.onChangeText;
+    if (onChangeText) {
+      onChangeText(text);
+    }
   },
 
   _getRowLoader() {
@@ -487,6 +619,28 @@ getCurrentLocation() {
         size="small"
       />
     );
+  },
+
+  _renderRowData(rowData) {
+    if (this.props.renderRow) {
+      return this.props.renderRow(rowData);
+    }
+
+    return (
+      <Text style={[{flex: 1}, defaultStyles.description, this.props.styles.description, rowData.isPredefinedPlace ? this.props.styles.predefinedPlacesDescription : {}]}
+        numberOfLines={1}
+      >
+        {this._renderDescription(rowData)}
+      </Text>
+    );
+  },
+
+  _renderDescription(rowData) {
+    if (this.props.renderDescription) {
+      return this.props.renderDescription(rowData);
+    }
+    console.log('render description', rowData);
+    return rowData.properties.label;
   },
 
   _renderLoader(rowData) {
@@ -502,71 +656,121 @@ getCurrentLocation() {
     return null;
   },
 
-  _renderRow(rowData = {}) {
-    // rowData.properties.name = rowData.properties.name || rowData.formatted_address || rowData.properties.region;
-    // console.log(rowData);
+  _renderRow(rowData = {}, sectionID, rowID) {
     return (
-      <TouchableHighlight
-        onPress={() =>
-          this._onPress(rowData)
-        }
-        underlayColor="#c8c7cc"
-      >
-        <View>
+      <ScrollView
+        style={{ flex: 1 }}
+        scrollEnabled={this.props.isRowScrollable}
+        keyboardShouldPersistTaps={this.props.keyboardShouldPersistTaps}
+        horizontal={true}
+        showsHorizontalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}>
+        <TouchableHighlight
+          style={{ minWidth: WINDOW.width }}
+          onPress={() => this._onPress(rowData)}
+          underlayColor={this.props.listUnderlayColor || "#c8c7cc"}
+        >
           <View style={[defaultStyles.row, this.props.styles.row, rowData.isPredefinedPlace ? this.props.styles.specialItemRow : {}]}>
-            <Text
-              style={[{flex: 1}, defaultStyles.description, this.props.styles.description, rowData.isPredefinedPlace ? this.props.styles.predefinedPlacesDescription : {}]}
-              numberOfLines={1}
-            >
-              {rowData.properties.label}
-            </Text>
+            {this._renderRowData(rowData)}
             {this._renderLoader(rowData)}
           </View>
-          <View style={[defaultStyles.separator, this.props.styles.separator]} />
-        </View>
-      </TouchableHighlight>
+        </TouchableHighlight>
+      </ScrollView>
+    );
+  },
+
+  _renderSeparator(sectionID, rowID) {
+    if (rowID == this.state.dataSource.getRowCount() - 1) {
+      return null
+    }
+
+    return (
+      <View
+        key={ `${sectionID}-${rowID}` }
+        style={[defaultStyles.separator, this.props.styles.separator]} />
     );
   },
 
   _onBlur() {
     this.triggerBlur();
-    this.setState({listViewDisplayed: false});
+    this.setState({
+      listViewDisplayed: false
+    });
   },
 
   _onFocus() {
-    this.setState({listViewDisplayed: true});
+    this.setState({
+      listViewDisplayed: true
+    });
+  },
+
+  _shouldShowPoweredLogo() {
+
+    if (!this.props.enablePoweredByContainer || this.state.dataSource.getRowCount() == 0) {
+      return false
+    }
+
+    for (let i = 0; i < this.state.dataSource.getRowCount(); i++) {
+      let row = this.state.dataSource.getRowData(0, i);
+
+      if (!row.hasOwnProperty('isCurrentLocation') && !row.hasOwnProperty('isPredefinedPlace')) {
+        return true
+      }
+    }
+
+    return false
+  },
+
+  _renderLeftButton() {
+    if (this.props.renderLeftButton) {
+      return this.props.renderLeftButton()
+    }
+  },
+
+  _renderRightButton() {
+      if (this.props.renderRightButton) {
+        return this.props.renderRightButton()
+      }
+    },
+
+  _renderPoweredLogo() {
+    if (!this._shouldShowPoweredLogo()) {
+      return null
+    }
+
+    return (
+      <View
+          style={[defaultStyles.row, defaultStyles.poweredContainer, this.props.styles.poweredContainer]}
+        >
+
+        </View>
+    );
   },
 
   _getListView() {
     if ((this.state.text !== '' || this.props.predefinedPlaces.length || this.props.currentLocation === true) && this.state.listViewDisplayed === true) {
-      // console.log(this.state.dataSource);
       return (
         <ListView
-          keyboardShouldPersistTaps={true}
+          keyboardShouldPersistTaps="always"
           keyboardDismissMode="on-drag"
           style={[defaultStyles.listView, this.props.styles.listView]}
           dataSource={this.state.dataSource}
-          renderRow={this._renderRow}
+          renderSeparator={this._renderSeparator}
           automaticallyAdjustContentInsets={false}
-
           {...this.props}
+          renderRow={this._renderRow}
+          renderFooter={this._renderPoweredLogo}
         />
-      );
-    }
-
-    if(this.props.enablePoweredByContainer) {
-      return (
-        <View
-          style={[defaultStyles.poweredContainer, this.props.styles.poweredContainer]}
-        >
-        </View>
       );
     }
 
     return null;
   },
   render() {
-    let { onChangeText, onFocus, ...userProps } = this.props.textInputProps;
+    let {
+      onFocus,
+      ...userProps
+    } = this.props.textInputProps;
     return (
       <View
         style={[defaultStyles.container, this.props.styles.container]}
@@ -574,20 +778,28 @@ getCurrentLocation() {
         <View
           style={[defaultStyles.textInputContainer, this.props.styles.textInputContainer]}
         >
+          {this._renderLeftButton()}
           <TextInput
             { ...userProps }
             ref="textInput"
             autoFocus={this.props.autoFocus}
+            keyboardType={this.props.keyboardType}
+            autoCorrect={false}
+            returnKeyType={this.props.returnKeyType}
             style={[defaultStyles.textInput, this.props.styles.textInput]}
-            onChangeText={onChangeText ? text => {this._onChangeText(text); onChangeText(text)} : this._onChangeText}
+            onChangeText={this._handleChangeText}
             value={this.state.text}
             placeholder={this.props.placeholder}
+            onSubmitEditing={() => { this.props.onSubmitEditing()}}
             placeholderTextColor={this.props.placeholderTextColor}
             onFocus={onFocus ? () => {this._onFocus(); onFocus()} : this._onFocus}
             clearButtonMode="while-editing"
+            underlineColorAndroid={this.props.underlineColorAndroid}
           />
+          {this._renderRightButton()}
         </View>
         {this._getListView()}
+        {this.props.children}
       </View>
     );
   },
@@ -608,5 +820,7 @@ const create = function create(options = {}) {
 };
 
 
-module.exports = {MapzenPlacesAutocomplete, create};
-
+module.exports = {
+  MapzenPlacesAutocomplete,
+  create
+};
