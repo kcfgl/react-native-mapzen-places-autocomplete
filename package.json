@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/java99/react-native-mapzen-places-autocomplete.git"
+    "url": "git+https://github.com/kcfgl/react-native-mapzen-places-autocomplete.git"
   },
   "keywords": [
     "mapzen",
@@ -21,9 +21,9 @@
   "author": "java99",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/java99/react-native-mapzen-places-autocomplete/issues"
+    "url": "https://github.com/kcfgl/react-native-mapzen-places-autocomplete.git/issues"
   },
-  "homepage": "https://github.com/java99/react-native-mapzen-places-autocomplete#readme",
+  "homepage": "https://github.com/kcfgl/react-native-mapzen-places-autocomplete.git#readme",
   "dependencies": {
     "qs": "^5.2.0"
   },
