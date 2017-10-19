@@ -578,7 +578,7 @@ const MapzenPlacesAutocomplete = React.createClass({
       //https://search.mapzen.com/v1/autocomplete?text=Sara&boundary.country=usa&layers=locality&api_key=mapzen-QA5vdP9
 
 
-      var mapzenSearch = 'https://search.mapzen.com/v1/search?boundary.country=usa&size=5&api_key=mapzen-QA5vdP9' + '&text='  +encodeURIComponent(text);
+      var mapzenSearch = 'https://search.mapzen.com/v1/autocomplete?boundary.country=usa&size=5&api_key=mapzen-QA5vdP9' + '&text='  +encodeURIComponent(text);
 
       if(this.props.layers) {
         mapzenSearch = mapzenSearch + '&layers='+ this.props.layers;
